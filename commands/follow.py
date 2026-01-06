@@ -1,3 +1,5 @@
+# commands/follow.py
+
 from storage.profile import follow, unfollow, get_user
 
 def dispatch(cmd, args, state):
@@ -12,7 +14,9 @@ def dispatch(cmd, args, state):
         target_user = args[0]
         try:
             follow(state.user, target_user)
+            profile = get_user(state.user)
             print(f"[FOLLOW] You are now following {target_user}")
+            print(f"[FOLLOW] You now follow {len(profile['following'])} users")
         except ValueError as e:
             print(f"[FOLLOW] Error: {e}")
 
@@ -26,6 +30,8 @@ def dispatch(cmd, args, state):
         target_user = args[0]
         try:
             unfollow(state.user, target_user)
+            profile = get_user(state.user)
             print(f"[UNFOLLOW] You unfollowed {target_user}")
+            print(f"[UNFOLLOW] You now follow {len(profile['following'])} users")
         except ValueError as e:
             print(f"[UNFOLLOW] Error: {e}")
