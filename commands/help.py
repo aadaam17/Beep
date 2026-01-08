@@ -1,50 +1,52 @@
 def dispatch(cmd, args, state):
     print("""
-Beep CLI Help
+  Beep CLI Help
 
-Disclaimer: Use "beep" prefix on all commands to work
-i.e beep register <username>
+  Disclaimer: Use "beep" prefix on all commands to work
+  i.e beep register <username>
 
--- Authentication --
-register <username>
-login <username>
-logout
+  -- Authentication --
+  register <username>
+  login <username>
+  logout
 
--- Posts --
-post "content"
-comment <post_id> "comment"
-share <post_id>
-quote <post_id> "quote"
-delete <post_id>
+  -- Posts --
+  post "content"
+  comment <post_id> "comment"
+  share <post_id>
+  quote <post_id> "quote"
+  delete <post_id>
 
--- Profile --
-profile [username] [--posts] [--shared]
+  -- Profile --
+  profile [username] [--posts] [--shared]
 
--- Follow --
-follow <username>
-unfollow <username>
+  -- Follow --
+  follow <username>
+  unfollow <username>
 
--- Chat --
-chat <username>
-message "your message"
-exit
+  -- Chat --
+  chat <username>
+  message "your message"
+  exit
 
--- Rooms --
-room <name> [--public|--private]
-join <room>
-leave <room>
-invite <username>
+  -- Rooms --
+  beep room <name> [--private] [--ephemeral]
+  beep join <name>
+  beep leave
+  beep say <message>
+  beep late [--all | <number>]
+  beep invite <username>
 
--- Feed --
-fyp [global|followed]
-next
-hold
-resume
+  -- Feed --
+  fyp [global|followed]
+  next
+  hold
+  resume
 
--- Moderation --
-mute <username>
-kick <username>
+  -- Moderation --
+  mute <username>
+  kick <username>
 
--- Help --
-help
+  -- Help --
+  help
 """)

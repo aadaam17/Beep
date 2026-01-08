@@ -1,3 +1,4 @@
+#optional
 from .fs import BeepFS
 fs = BeepFS()
 

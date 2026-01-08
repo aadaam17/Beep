@@ -11,7 +11,7 @@ COMMAND_MODULES = {
     "profile": ["profile"],
     "follow": ["follow", "unfollow"],
     "chat": ["chat", "message", "exit"],
-    "room": ["room", "join", "leave", "invite"],
+    "room": ["room", "join", "leave", "invite", "say", "late"],
     "feed": ["fyp", "next", "hold", "resume"],
     "moderation": ["mute", "kick"],
     "help": ["help"],
@@ -29,8 +29,10 @@ MODULE_DISPATCH = {
     "help": help.dispatch,
 }
 
-# Flatten command-to-module mapping for quick lookup
 COMMAND_TO_MODULE = {cmd: module for module, cmds in COMMAND_MODULES.items() for cmd in cmds}
+
+# Room-only commands
+ROOM_ONLY = {"say", "late", "invite"}
 
 def get_prompt():
     if state.mode == Mode.CHAT and state.current_chat:
@@ -43,7 +45,7 @@ def get_prompt():
         return "[fyp:global] > "
 
 def main_loop():
-    print("Welcome to Beep CLI v0.1")
+    print("Welcome to Beep CLI v0.2")
 
     while True:
         try:
@@ -51,16 +53,18 @@ def main_loop():
             if not line:
                 continue
 
-            parts = shlex.split(line)
-            if not parts:
+            # Allow plain messages inside a room
+            if state.mode == Mode.ROOM and not line.startswith("beep"):
+                from commands import room
+                room.dispatch("say", line, state)
                 continue
 
-            # Enforce mandatory 'beep' prefix
-            if parts[0] != "beep":
+            parts = shlex.split(line)
+            if not parts or parts[0] != "beep":
                 print("All commands must start with 'beep'")
                 continue
 
-            parts = parts[1:]  # Remove the 'beep' prefix
+            parts = parts[1:]  # remove 'beep'
             if not parts:
                 print("No command provided after 'beep'")
                 continue
@@ -69,10 +73,26 @@ def main_loop():
             args = " ".join(parts[1:]) if len(parts) > 1 else ""
 
             module_name = COMMAND_TO_MODULE.get(cmd_name)
-            if module_name:
-                MODULE_DISPATCH[module_name](cmd_name, args, state)
-            else:
+            if not module_name:
                 print(f"Unknown command: {cmd_name}")
+                continue
+
+            # --- Enforce room-only commands ---
+            if cmd_name in ROOM_ONLY:
+                if state.mode != Mode.ROOM:
+                    print(f"Error: '{cmd_name}' can only be used inside a room")
+                    continue
+                from commands import room
+                room.dispatch(cmd_name, args, state)
+                continue
+
+            # --- Enforce global-only commands ---
+            if state.mode == Mode.ROOM and cmd_name not in ROOM_ONLY and cmd_name != "leave":
+                print(f"Error: '{cmd_name}' cannot be used inside a room")
+                continue
+
+            # --- Dispatch normally ---
+            MODULE_DISPATCH[module_name](cmd_name, args, state)
 
         except KeyboardInterrupt:
             print("\nExiting Beep CLI. Bye!")
