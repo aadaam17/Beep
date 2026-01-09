@@ -3,7 +3,10 @@ import json
 import uuid
 from pathlib import Path
 from datetime import datetime
+
 from storage.crypto import load_or_create_keys
+from storage.profile import get_user, update_user
+
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives import hashes
 
@@ -11,11 +14,11 @@ from cryptography.hazmat.primitives import hashes
 
 STORAGE_DIR = Path.home() / ".beep_storage"
 POSTS_DIR = STORAGE_DIR / "posts"
-PROFILES_DIR = STORAGE_DIR / "profiles"
 ROOMS_DIR = STORAGE_DIR / "rooms"
-USER_DIR = STORAGE_DIR / "users"
+USER_DIR = STORAGE_DIR / "users"      # crypto keys only
+CHATS_DIR = STORAGE_DIR / "chats"
 
-for path in (STORAGE_DIR, POSTS_DIR, PROFILES_DIR, ROOMS_DIR, USER_DIR):
+for path in (STORAGE_DIR, POSTS_DIR, ROOMS_DIR, USER_DIR, CHATS_DIR):
     path.mkdir(exist_ok=True)
 
 PAGE = 10
@@ -24,7 +27,6 @@ PAGE = 10
 
 class BeepFS:
     # ------------ GENERIC HELPERS ------------
-
     @staticmethod
     def _read_json(path, default=None):
         if not path.exists():
@@ -38,19 +40,27 @@ class BeepFS:
             json.dump(data, f, indent=4)
 
     # ---------------- POSTS ----------------
-
-    def list_posts(self):
-        return sorted((p.stem for p in POSTS_DIR.glob("*.json")), reverse=True)
+    def list_posts(self, only_existing_users=True):
+        posts = sorted((p.stem for p in POSTS_DIR.glob("*.json")), reverse=True)
+        if only_existing_users:
+            valid_posts = []
+            for pid in posts:
+                post = self.read_post(pid)
+                creator = post.get("creator")
+                if creator and get_user(creator):
+                    valid_posts.append(pid)
+            return valid_posts
+        return posts
 
     def list_followed_posts(self, username):
-        from storage.profile import get_user
         user = get_user(username)
         if not user:
             return []
         followed = set(user.get("following", []))
+        posts = self.list_posts(only_existing_users=True)
         return [
             post_id
-            for post_id in self.list_posts()
+            for post_id in posts
             if self.read_post(post_id).get("creator") in followed
         ]
 
@@ -60,27 +70,55 @@ class BeepFS:
     def read_post(self, post_id):
         return self._read_json(
             self.post_path(post_id),
-            default={"creator": None, "content": "[missing]", "revoked": True, "shared_from": None},
+            default={
+                "creator": None,
+                "content": "[missing]",
+                "revoked": True,
+                "shared_from": None
+            },
         )
 
     def save_post(self, post_id, data):
         self._write_json(self.post_path(post_id), data)
 
-    def create_post(self, creator, content, shared_from=None):
+    # ---------------- UPDATED CREATE_POST ----------------
+    def create_post(self, creator, content, shared_from=None, quote=False, post_type="post", parent_id=None):
+        """
+        Create a new post.
+        - creator: username
+        - content: text content of the post
+        - shared_from: post_id if this is a shared/quoted post
+        - quote: True if this is a quoted post
+        - post_type: "post", "comment", "share", "quote"
+        - parent_id: parent post id for comments
+        """
+        user = get_user(creator)
+        if not user:
+            raise ValueError(f"User '{creator}' does not exist")
+
         post_id = f"post{uuid.uuid4().hex[:8]}"
         post_data = {
             "creator": creator,
             "content": content,
             "revoked": False,
-            "shared_from": shared_from,
+            "shared_from": shared_from,  # only for shares/quotes
+            "parent_id": parent_id,      # only for comments
+            "quote": quote,
+            "type": post_type,           # new field
             "timestamp": datetime.now().isoformat()
         }
+
         self.save_post(post_id, post_data)
 
-        from storage.profile import get_user, update_user
-        user = get_user(creator) or {"username": creator, "followers": [], "following": [], "posts": [], "shared": []}
-        target = "shared" if shared_from else "posts"
-        user[target].append(post_id)
+        # Save reference in user profile
+        if post_type == "comment":
+            target = "comments"
+        elif post_type in ("share", "quote"):
+            target = "shared"
+        else:
+            target = "posts"
+
+        user.setdefault(target, []).append(post_id)
         update_user(creator, user)
 
         return post_id
@@ -92,34 +130,16 @@ class BeepFS:
         post["revoked"] = True
         self.save_post(post_id, post)
 
-    # ---------------- PROFILES ----------------
+    # ---------------- USERS ----------------
+    def user_exists(self, username):
+        return get_user(username) is not None
 
-    def profile_path(self, username):
-        return PROFILES_DIR / f"{username}.json"
-
-    def read_profile(self, username):
-        return self._read_json(
-            self.profile_path(username),
-            default={"username": username, "followers": [], "following": [], "posts": [], "shared": []},
-        )
-
-    def save_profile(self, username, data):
-        self._write_json(self.profile_path(username), data)
-
-    # ---------------- USER VIEWS ----------------
-
-    def list_user_posts(self, username):
-        profile = self.read_profile(username)
-        return [pid for pid in profile.get("posts", []) if not self.read_post(pid).get("revoked")]
-
-    def list_user_shared(self, username):
-        profile = self.read_profile(username)
-        return [pid for pid in profile.get("shared", []) if not self.read_post(pid).get("revoked")]
-
-    # ---------- ROOMS ----------
-
+    # ---------------- ROOMS ----------------
     def room_path(self, name):
         return ROOMS_DIR / f"{name}.json"
+
+    def list_rooms(self):
+        return sorted((p.stem for p in ROOMS_DIR.glob("*.json")))
 
     def _write_room(self, room):
         self.room_path(room["name"]).write_text(json.dumps(room, indent=4))
@@ -128,17 +148,22 @@ class BeepFS:
         path = self.room_path(name)
         if not path.exists():
             return None
+
         room = json.loads(path.read_text())
 
-        # auto-expire
         if room.get("ephemeral") and time.time() > room["expires_at"]:
             path.unlink(missing_ok=True)
             return None
+
         return room
 
     def create_room(self, name, creator, private=False, ttl=None):
+        if not self.user_exists(creator):
+            raise ValueError(f"User '{creator}' does not exist")
+
         if self.room_path(name).exists():
             raise ValueError("Room exists")
+
         room = {
             "name": name,
             "type": "private" if private else "public",
@@ -151,25 +176,34 @@ class BeepFS:
         self._write_room(room)
 
     def join_room(self, name, user, re_encrypt_old=False):
+        if not self.user_exists(user):
+            raise ValueError(f"User '{user}' does not exist")
+
         room = self._read_room(name)
         if not room:
             raise ValueError("Room not found")
+
         if room["type"] == "private" and user not in room["invites"]:
             raise PermissionError("Invite required")
+
         if user not in room["members"]:
             room["members"].append(user)
             if re_encrypt_old:
                 self._encrypt_old_messages_for_new_user(room, user)
+
         self._write_room(room)
 
     def invite(self, room_name, user):
+        if not self.user_exists(user):
+            raise ValueError(f"User '{user}' does not exist")
+
         room = self._read_room(room_name)
         if user not in room["invites"]:
             room["invites"].append(user)
+
         self._write_room(room)
 
-    # ---------------- MESSAGE ENCRYPTION ----------------
-
+    # ---------------- ROOM MESSAGES ----------------
     def say(self, room_name, sender, message):
         room = self._read_room(room_name)
         if not room or sender not in room["members"]:
@@ -177,12 +211,16 @@ class BeepFS:
 
         msg_bytes = message.encode()
         encrypted = {}
+
         for member in room["members"]:
             _, pub_key = load_or_create_keys(member)
             encrypted_blob = pub_key.encrypt(
                 msg_bytes,
-                padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                             algorithm=hashes.SHA256(), label=None)
+                padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None
+                )
             )
             encrypted[member] = encrypted_blob.hex()
 
@@ -191,6 +229,7 @@ class BeepFS:
             "timestamp": int(time.time()),
             "encrypted": encrypted
         })
+
         self._write_room(room)
 
     def read_messages(self, room_name, username, start=0, limit=10):
@@ -199,19 +238,21 @@ class BeepFS:
             return [], 0
 
         private_key, _ = load_or_create_keys(username)
-        visible_msgs = []
+        visible = []
 
-        for msg in room.get("messages", []):
+        for msg in room["messages"]:
             if username not in msg["encrypted"]:
                 continue
-            encrypted_blob = bytes.fromhex(msg["encrypted"][username])
             try:
                 decrypted = private_key.decrypt(
-                    encrypted_blob,
-                    padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                                 algorithm=hashes.SHA256(), label=None)
+                    bytes.fromhex(msg["encrypted"][username]),
+                    padding.OAEP(
+                        mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                        algorithm=hashes.SHA256(),
+                        label=None
+                    )
                 )
-                visible_msgs.append({
+                visible.append({
                     "sender": msg["sender"],
                     "timestamp": msg["timestamp"],
                     "content": decrypted.decode()
@@ -219,24 +260,124 @@ class BeepFS:
             except:
                 continue
 
-        total = len(visible_msgs)
-        return visible_msgs[start:start+limit], total
+        total = len(visible)
+        return visible[start:start + limit], total
 
-    # --- OPTIONAL: Re-encrypt old messages for new users ---
-    def _encrypt_old_messages_for_new_user(self, room, new_user):
-        _, pub_key = load_or_create_keys(new_user)
-        for msg in room.get("messages", []):
-            if new_user not in msg["encrypted"]:
-                sender = msg["sender"]
-                priv_key, _ = load_or_create_keys(sender)
+    # ---------------- CHATS (DMs) ----------------
+    def chat_path(self, name):
+        return CHATS_DIR / f"{name}.json"
+
+    def list_chats(self):
+        return sorted((c.stem for c in CHATS_DIR.glob("*.json")))
+
+    def create_chat(self, chat_name, user_a, user_b):
+        if user_a == user_b:
+            raise ValueError("Cannot chat with yourself")
+        if not self.user_exists(user_a) or not self.user_exists(user_b):
+            raise ValueError("Both users must exist")
+
+        members = sorted([user_a, user_b])
+        name = "__".join(members)
+        path = self.chat_path(name)
+        if path.exists():
+            return name
+
+        chat = {
+            "name": name,
+            "members": members,
+            "messages": [],
+            "created_at": time.time()
+        }
+        self._write_json(path, chat)
+        return name
+
+    def read_chat(self, name):
+        return self._read_json(self.chat_path(name))
+
+    def chat_say(self, chat_name, sender, message):
+        chat = self.read_chat(chat_name)
+        if not chat or sender not in chat["members"]:
+            raise PermissionError("Cannot send message")
+
+        msg_bytes = message.encode()
+        encrypted = {}
+
+        for member in chat["members"]:
+            _, pub_key = load_or_create_keys(member)
+            encrypted_blob = pub_key.encrypt(
+                msg_bytes,
+                padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None
+                )
+            )
+            encrypted[member] = encrypted_blob.hex()
+
+        chat["messages"].append({
+            "sender": sender,
+            "timestamp": int(time.time()),
+            "encrypted": encrypted
+        })
+
+        self._write_json(self.chat_path(chat_name), chat)
+
+    def chat_read_messages(self, chat_name, user, start=0, limit=10):
+        chat = self.read_chat(chat_name)
+        if not chat or user not in chat["members"]:
+            return [], 0
+
+        priv_key, _ = load_or_create_keys(user)
+        visible = []
+
+        for msg in chat["messages"]:
+            if user not in msg["encrypted"]:
+                continue
+            try:
                 decrypted = priv_key.decrypt(
-                    bytes.fromhex(msg["encrypted"][sender]),
-                    padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                                 algorithm=hashes.SHA256(), label=None)
+                    bytes.fromhex(msg["encrypted"][user]),
+                    padding.OAEP(
+                        mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                        algorithm=hashes.SHA256(),
+                        label=None
+                    )
                 )
-                encrypted_blob = pub_key.encrypt(
-                    decrypted,
-                    padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                                 algorithm=hashes.SHA256(), label=None)
+                visible.append({
+                    "sender": msg["sender"],
+                    "timestamp": msg["timestamp"],
+                    "content": decrypted.decode()
+                })
+            except:
+                continue
+
+        total = len(visible)
+        return visible[start:start + limit], total
+
+    # ----------- ENCRYPTION HELPERS -----------
+    def _encrypt_old_messages_for_new_user(self, container, new_user):
+        _, pub_key = load_or_create_keys(new_user)
+
+        for msg in container["messages"]:
+            if new_user in msg["encrypted"]:
+                continue
+
+            sender = msg["sender"]
+            priv_key, _ = load_or_create_keys(sender)
+            decrypted = priv_key.decrypt(
+                bytes.fromhex(msg["encrypted"][sender]),
+                padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None
                 )
-                msg["encrypted"][new_user] = encrypted_blob.hex()
+            )
+
+            encrypted_blob = pub_key.encrypt(
+                decrypted,
+                padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None
+                )
+            )
+            msg["encrypted"][new_user] = encrypted_blob.hex()

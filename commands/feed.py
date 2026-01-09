@@ -1,26 +1,21 @@
+# commands/feed.py
+
 from storage.fs import BeepFS
 from datetime import datetime
 
 fs = BeepFS()
+POSTS_PER_PAGE = 15
 
-POSTS_PER_PAGE = 15  # number of posts to show per page
-
-
-# ---------- TIME HELPERS ----------
 
 def relative_time(iso_ts):
-    """
-    Convert ISO timestamp to relative time (e.g. 3m ago, 2h ago)
-    """
+    """Return relative time like '3h ago'."""
     try:
         past = datetime.fromisoformat(iso_ts)
     except Exception:
         return ""
-
     now = datetime.now()
     diff = now - past
     seconds = int(diff.total_seconds())
-
     if seconds < 60:
         return f"{seconds}s ago"
     minutes = seconds // 60
@@ -32,9 +27,6 @@ def relative_time(iso_ts):
     days = hours // 24
     if days < 7:
         return f"{days}d ago"
-    weeks = days // 7
-    if weeks < 4:
-        return f"{weeks}w ago"
     months = days // 30
     if months < 12:
         return f"{months}mo ago"
@@ -42,34 +34,95 @@ def relative_time(iso_ts):
     return f"{years}y ago"
 
 
-# ---------- COMMAND DISPATCH ----------
+def _get_comments(post_id):
+    """Return post_ids that are comments of the given post."""
+    all_posts = fs.list_posts()
+    comments = []
+    for pid in all_posts:
+        post = fs.read_post(pid)
+        # Only include comments where type=="comment" and parent_id matches
+        if post.get("type") == "comment" and post.get("parent_id") == post_id:
+            comments.append(pid)
+    return comments
+
+
+def _print_posts(posts, state):
+    """Print posts nicely with shared, quoted, comments, deleted."""
+    for post_id in posts:
+        data = fs.read_post(post_id)
+
+        # ---------------- DELETED POSTS ----------------
+        if data.get("revoked"):
+            print(f":: [deleted post] - {post_id}")
+            comments = _get_comments(post_id)
+            for c in comments:
+                c_data = fs.read_post(c)
+                c_ts = c_data.get("timestamp")
+                rel = relative_time(c_ts) if c_ts else ""
+                print(f"    : [{rel}] [{c_data.get('creator')}] - {c}: {c_data.get('content', '')}")
+            print()
+            continue
+
+        # ---------------- SHARED / QUOTED POSTS ----------------
+        if data.get("shared_from"):
+            original_id = data["shared_from"]
+            original = fs.read_post(original_id)
+            t = datetime.fromisoformat(data["timestamp"]).strftime("%d.%m.%Y")
+            rel = relative_time(data["timestamp"])
+            label = "Quoted" if data.get("quote", False) else "Shared"
+            content_display = f": {data.get('content')}" if data.get("quote", False) else ""
+            print(f":: {label} [{t} · {rel}] [{data.get('creator')}] - {post_id} {content_display}")
+            if original:
+                ot = datetime.fromisoformat(original["timestamp"]).strftime("%d.%m.%Y")
+                orel = relative_time(original["timestamp"])
+                print(f"      ↳ [{ot} · {orel}] [{original.get('creator')}] - {original_id}: {original.get('content')}")
+            comments = _get_comments(post_id)
+            for c in comments:
+                c_data = fs.read_post(c)
+                c_ts = c_data.get("timestamp")
+                rel = relative_time(c_ts) if c_ts else ""
+                print(f"      : [{rel}] [{c_data.get('creator')}] - {c}: {c_data.get('content', '')}")
+            print()
+            continue
+
+        # ---------------- NORMAL POSTS ----------------
+        t = datetime.fromisoformat(data["timestamp"]).strftime("%d.%m.%Y")
+        rel = relative_time(data["timestamp"])
+        print(f":: [{t} · {rel}] [{data.get('creator')}] - {post_id}: {data.get('content', '')}")
+
+        # ---------------- COMMENTS ----------------
+        comments = _get_comments(post_id)
+        for c in comments:
+            c_data = fs.read_post(c)
+            c_ts = c_data.get("timestamp")
+            rel = relative_time(c_ts) if c_ts else ""
+            print(f"    : [{rel}] [{c_data.get('creator')}] - {c}: {c_data.get('content', '')}")
+
+        print()  # Blank line between posts
+
 
 def dispatch(cmd, args, state):
-    # Initialize pagination if it doesn't exist
+    """Dispatch FYP commands: fyp, next, hold, resume."""
     if not hasattr(state, "fyp_index"):
         state.fyp_index = 0
 
     if cmd == "fyp":
         fyp_type = args or "global"
         state.switch_fyp(fyp_type)
-        state.fyp_index = 0  # reset pagination
-
+        state.fyp_index = 0
         posts = _get_current_feed(state)
         _print_posts(posts, state)
 
     elif cmd == "next":
-        if state.hold:
+        if getattr(state, "hold", False):
             print("[FYP] Feed is on hold. Use 'resume' to continue.")
             return
-
         state.fyp_index += POSTS_PER_PAGE
         posts = _get_current_feed(state)
-
         if not posts:
             print("[FYP] No more posts.")
             state.fyp_index -= POSTS_PER_PAGE
             return
-
         _print_posts(posts, state)
 
     elif cmd == "hold":
@@ -77,23 +130,19 @@ def dispatch(cmd, args, state):
         print(f"[FYP] Feed hold: {state.hold}")
 
     elif cmd == "resume":
-        if not state.hold:
+        if not getattr(state, "hold", False):
             print("[FYP] Feed is not on hold.")
             return
         state.toggle_hold()
         print(f"[FYP] Feed resumed: {not state.hold}")
 
 
-# ---------- FEED LOGIC ----------
-
 def _get_current_feed(state):
-    """
-    Returns a list of posts based on the current FYP mode and pagination.
-    """
+    """Return posts for current FYP mode."""
     start = getattr(state, "fyp_index", 0)
     end = start + POSTS_PER_PAGE
 
-    if state.fyp_type == "followed":
+    if getattr(state, "fyp_type", "global") == "followed":
         if not state.user:
             print("[FYP] You must be logged in to view followed feed. Showing global feed.")
             posts = fs.list_posts()
@@ -103,32 +152,3 @@ def _get_current_feed(state):
         posts = fs.list_posts()
 
     return posts[start:end]
-
-
-# ---------- OUTPUT ----------
-
-def _print_posts(posts, state):
-    """
-    Prints posts nicely in CLI
-    """
-    start = getattr(state, "fyp_index", 0) + 1
-    end = getattr(state, "fyp_index", 0) + len(posts)
-
-    print(f"[FYP] ({state.fyp_type}) Posts {start} - {end}")
-
-    for post_id in posts:
-        data = fs.read_post(post_id)
-
-        status = "[deleted]" if data.get("revoked") else ""
-        creator = data.get("creator", "unknown")
-        content = data.get("content", "")[:50]
-
-        ts = data.get("timestamp")
-        if ts:
-            date_str = datetime.fromisoformat(ts).strftime("%d.%m.%Y")
-            rel = relative_time(ts)
-            time_display = f"[{date_str} · {rel}] "
-        else:
-            time_display = ""
-
-        print(f"{time_display}[{creator}] - {post_id} {status}: {content}")

@@ -29,17 +29,21 @@ def dispatch(cmd, args, state):
             if not username:
                 print("[AUTH] Error: Username required! Use -u <username>")
                 return
-            user = profile.create_user(username, password)
+
+            username_clean = username.lower()  # lowercase for storage
+            user = profile.create_user(username_clean, password)
             state.user = user["username"]
-            print(f"[AUTH] User '{username}' registered successfully!")
+            print(f"[AUTH] User '{username_clean}' registered successfully!")
 
         elif cmd == "login":
             if not username:
                 print("[AUTH] Error: Username required! Use -u <username>")
                 return
-            user = profile.authenticate(username, password)
+
+            username_clean = username.lower()  # lowercase for lookup
+            user = profile.authenticate(username_clean, password)
             state.user = user["username"]
-            print(f"[AUTH] User '{username}' logged in successfully!")
+            print(f"[AUTH] User '{username_clean}' logged in successfully!")
 
         elif cmd == "logout":
             if state.user:

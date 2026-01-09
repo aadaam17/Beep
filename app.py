@@ -10,7 +10,7 @@ COMMAND_MODULES = {
     "post": ["post", "comment", "share", "quote", "delete"],
     "profile": ["profile"],
     "follow": ["follow", "unfollow"],
-    "chat": ["chat", "message", "exit"],
+    "chat": ["chat", "say", "read", "exit"],
     "room": ["room", "join", "leave", "invite", "say", "late"],
     "feed": ["fyp", "next", "hold", "resume"],
     "moderation": ["mute", "kick"],
@@ -32,7 +32,7 @@ MODULE_DISPATCH = {
 COMMAND_TO_MODULE = {cmd: module for module, cmds in COMMAND_MODULES.items() for cmd in cmds}
 
 # Room-only commands
-ROOM_ONLY = {"say", "late", "invite"}
+ROOM_ONLY = {"late", "invite"}
 
 def get_prompt():
     if state.mode == Mode.CHAT and state.current_chat:
@@ -53,13 +53,8 @@ def main_loop():
             if not line:
                 continue
 
-            # Allow plain messages inside a room
-            if state.mode == Mode.ROOM and not line.startswith("beep"):
-                from commands import room
-                room.dispatch("say", line, state)
-                continue
-
             parts = shlex.split(line)
+
             if not parts or parts[0] != "beep":
                 print("All commands must start with 'beep'")
                 continue
@@ -72,6 +67,18 @@ def main_loop():
             cmd_name = parts[0]
             args = " ".join(parts[1:]) if len(parts) > 1 else ""
 
+            # --- Route 'say' based on mode ---
+            if cmd_name == "say":
+                if state.mode == Mode.CHAT:
+                    chat.dispatch(cmd_name, args, state)
+                    continue
+                elif state.mode == Mode.ROOM:
+                    room.dispatch(cmd_name, args, state)
+                    continue
+                else:
+                    print("Error: 'say' must be used inside a chat or room")
+                    continue
+
             module_name = COMMAND_TO_MODULE.get(cmd_name)
             if not module_name:
                 print(f"Unknown command: {cmd_name}")
@@ -82,7 +89,6 @@ def main_loop():
                 if state.mode != Mode.ROOM:
                     print(f"Error: '{cmd_name}' can only be used inside a room")
                     continue
-                from commands import room
                 room.dispatch(cmd_name, args, state)
                 continue
 
