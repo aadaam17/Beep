@@ -165,14 +165,20 @@ class BeepFS:
             raise ValueError("Room exists")
 
         room = {
-            "name": name,
-            "type": "private" if private else "public",
-            "members": [creator],
-            "invites": [],
-            "messages": [],
-            "ephemeral": bool(ttl),
-            "expires_at": time.time() + ttl if ttl else None,
+                "name": name,
+                "type": "private" if private else "public",
+                "owner": creator,
+                "moderators": [],
+                "members": [creator],
+                "invites": [],
+                "banned": [],
+                "muted": {},
+                "messages": [],
+                "ephemeral": bool(ttl),
+                "expires_at": time.time() + ttl if ttl else None,
         }
+
+
         self._write_room(room)
 
     def join_room(self, name, user, re_encrypt_old=False):
@@ -183,8 +189,11 @@ class BeepFS:
         if not room:
             raise ValueError("Room not found")
 
-        if room["type"] == "private" and user not in room["invites"]:
-            raise PermissionError("Invite required")
+        if user in room.get("banned", []):
+            raise PermissionError("You are banned from this room")
+        if room["type"] == "private":
+            if user != room["owner"] and user not in room["invites"]:
+                raise PermissionError("Invite required")
 
         if user not in room["members"]:
             room["members"].append(user)
@@ -208,6 +217,19 @@ class BeepFS:
         room = self._read_room(room_name)
         if not room or sender not in room["members"]:
             raise PermissionError("Cannot send message to a room you are not a member of")
+
+        # ---- MUTE ENFORCEMENT ----
+        muted = room.get("muted", {}).get(sender)
+        if muted:
+            if muted == "perma":
+                raise PermissionError("You are muted in this room")
+            if time.time() < muted.get("until", 0):
+                raise PermissionError("You are muted in this room")
+            else:
+                # mute expired → clean it
+                del room["muted"][sender]
+                self._write_room(room)
+
 
         msg_bytes = message.encode()
         encrypted = {}

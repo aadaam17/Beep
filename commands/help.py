@@ -1,52 +1,69 @@
 def dispatch(cmd, args, state):
     print("""
-  Beep CLI Help
+Beep — Anonymous CLI Social Network
+==================================
 
-  Disclaimer: Use "beep" prefix on all commands to work
-  i.e beep register <username>
+Note:
+  • Always prefix commands with `beep`
+  • Example: beep post "hello world"
 
-  -- Authentication --
-  register <username>
-  login <username>
-  logout
+-- Identity & Session --
+  register -u <username> -p <password>   Create local identity (generates keys)
+  login  -u <username> -p <password>   Unlock identity
+  logout                               Lock identity
 
-  -- Posts --
-  post "content"
-  comment <post_id> "comment"
-  share <post_id>
-  quote <post_id> "quote"
-  delete <post_id>
+-- Feed (FYP) --
+  fyp global                            Switch to global feed (default)
+  fyp followed                          Switch to followed feed
+  next                                  Load next posts
+  hold                                  Pause auto-loading
+  resume                                Resume auto-loading
 
-  -- Profile --
-  profile [username] [--posts] [--shared]
+-- Posts --
+  post "content"                        Create a post
+  comment <post_id> "comment"           Comment on a post
+  share <post_id>                       Share a post (reference)
+  quote <post_id> "text"                Quote a post (new post)
+  delete <post_id>                      Delete your post
 
-  -- Follow --
-  follow <username>
-  unfollow <username>
+-- Profile --
+  profile                               View your profile
+  profile <username>                    View another profile
+  profile --followers                   Show list of followers
+  profile --following                   Show list of following
+  profile --posts                       Show posts only
+  profile --shared                      Show shared posts only
 
-  -- Chat --
-  chat <username>
-  message "your message"
-  exit
+-- Follow --
+  follow <username>                     Follow a user
+  unfollow <username>                   Unfollow a user
 
-  -- Rooms --
-  beep room <name> [--private] [--ephemeral]
-  beep join <name>
-  beep leave
-  beep say <message>
-  beep late [--all | <number>]
-  beep invite <username>
+-- Chat --
+  chat                                  List chats
+  chat <username>                       Enter direct chat or room
+  say "message"                         Send message (chat mode)
+  read [--all | <number>]               Read messages
+  exit                                  Leave chat / return to feed
 
-  -- Feed --
-  fyp [global|followed]
-  next
-  hold
-  resume
+-- Rooms --
+  room                                  List rooms
+  room <name> [--private] [--ephemeral] Create a room
+  say "message"                         Send message (room mode)
+  late [--all | <number>]               Read room messages
+  join <name>                           Join a room
+  invite <username>                     Invite user to private room
+  leave                                 Leave chat / return to fe
+  ed
 
-  -- Moderation --
-  mute <username>
-  kick <username>
+-- Moderation (Room Owner and Moderators) --
+  mute <username>                       Mute a user
+  unmute <username>                     Unmute a user
+  kick <username>                       Remove user from room
 
-  -- Help --
-  help
+-- Mod (Exclusive to Room Owner)--
+  mod <username>                        Make a member a moderator
+  unmod <username>                      Remove a member from moderator
+
+-- Help --
+  help                                  Show this help
 """)

@@ -13,7 +13,7 @@ COMMAND_MODULES = {
     "chat": ["chat", "say", "read", "exit"],
     "room": ["room", "join", "leave", "invite", "say", "late"],
     "feed": ["fyp", "next", "hold", "resume"],
-    "moderation": ["mute", "kick"],
+    "moderation": ["mute", "unmute", "kick", "mod", "unmod"],
     "help": ["help"],
 }
 
@@ -32,7 +32,9 @@ MODULE_DISPATCH = {
 COMMAND_TO_MODULE = {cmd: module for module, cmds in COMMAND_MODULES.items() for cmd in cmds}
 
 # Room-only commands
-ROOM_ONLY = {"late", "invite"}
+ROOM_COMMANDS = {"late", "invite"}
+MOD_COMMANDS = {"mute", "unmute", "kick", "mod", "unmod"}
+ROOM_ONLY = ROOM_COMMANDS.union(MOD_COMMANDS)
 
 def get_prompt():
     if state.mode == Mode.CHAT and state.current_chat:
@@ -54,7 +56,6 @@ def main_loop():
                 continue
 
             parts = shlex.split(line)
-
             if not parts or parts[0] != "beep":
                 print("All commands must start with 'beep'")
                 continue
@@ -71,33 +72,36 @@ def main_loop():
             if cmd_name == "say":
                 if state.mode == Mode.CHAT:
                     chat.dispatch(cmd_name, args, state)
-                    continue
                 elif state.mode == Mode.ROOM:
                     room.dispatch(cmd_name, args, state)
-                    continue
                 else:
                     print("Error: 'say' must be used inside a chat or room")
-                    continue
+                continue  # done with this loop iteration
 
+            # --- Determine command module ---
             module_name = COMMAND_TO_MODULE.get(cmd_name)
             if not module_name:
                 print(f"Unknown command: {cmd_name}")
                 continue
 
-            # --- Enforce room-only commands ---
+            # --- Handle room-only commands ---
             if cmd_name in ROOM_ONLY:
                 if state.mode != Mode.ROOM:
                     print(f"Error: '{cmd_name}' can only be used inside a room")
                     continue
-                room.dispatch(cmd_name, args, state)
-                continue
 
-            # --- Enforce global-only commands ---
+                if cmd_name in ROOM_COMMANDS:
+                    room.dispatch(cmd_name, args, state)
+                else:  # moderation commands
+                    moderation.dispatch(cmd_name, args, state)
+                continue  # done with this loop iteration
+
+            # --- Enforce commands that cannot be used inside rooms ---
             if state.mode == Mode.ROOM and cmd_name not in ROOM_ONLY and cmd_name != "leave":
                 print(f"Error: '{cmd_name}' cannot be used inside a room")
                 continue
 
-            # --- Dispatch normally ---
+            # --- Dispatch normal commands ---
             MODULE_DISPATCH[module_name](cmd_name, args, state)
 
         except KeyboardInterrupt:
